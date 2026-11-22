@@ -1,4 +1,3 @@
-# --- ЦВЕТОВАЯ ПАЛИТРА (Тёмная тема) ---
 COLOR_BG = "#1E1E24"
 COLOR_SURFACE = "#2B2D35"
 COLOR_TEXT_MAIN = "#E9ECEF"
@@ -9,11 +8,9 @@ COLOR_DANGER = "#C92A2A"
 COLOR_GREEN_ER = "#B6D7A8"
 COLOR_BORDER = "#3E414A"
 
-# --- ШРИФТЫ ---
 FONT_HEADER = "Montserrat, sans-serif"
 FONT_MAIN = "Inter, sans-serif"
 
-# --- ОБЩИЕ СТИЛИ (QSS) ---
 MAIN_STYLE = f"""
     QMainWindow {{
         background-color: {COLOR_BG};

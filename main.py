@@ -4,10 +4,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QStackedWidget, QStackedLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QComboBox, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QPainter, QLinearGradient
+from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QCloseEvent
 import styles
 from database.db_manager import DatabaseManager
 import datetime
+from login import LoginWindow
 
 
 class AnimatedBackground(QWidget):
@@ -35,9 +36,13 @@ class AnimatedBackground(QWidget):
 
 
 class WorderApp(QMainWindow):
-    def __init__(self):
+    def __init__(self, user_id, username, role):
         super().__init__()
-        self.setWindowTitle("Worder — Тренажёр иностранных слов")
+        self.user_id = user_id
+        self.username = username
+        self.role = role
+
+        self.setWindowTitle(f"Worder — {username} ({role})")
         self.setMinimumSize(1024, 768)
         self.setStyleSheet(styles.MAIN_STYLE)
 
@@ -53,6 +58,12 @@ class WorderApp(QMainWindow):
         self.my_dict_screen = self.create_dict_screen(is_personal=True)
         self.all_words_screen = self.create_dict_screen(is_personal=False)
 
+        self.admin_index = -1
+        if self.role == 'admin':
+            self.admin_screen = self.create_admin_screen()
+            self.admin_index = 4
+            self.stacked_widget.addWidget(self.admin_screen)
+
         self.stacked_widget.addWidget(self.dashboard_screen)
         self.stacked_widget.addWidget(self.training_screen)
         self.stacked_widget.addWidget(self.my_dict_screen)
@@ -60,15 +71,18 @@ class WorderApp(QMainWindow):
 
         self.stacked_widget.setCurrentIndex(0)
 
+    def closeEvent(self, event: QCloseEvent):
+        event.ignore()
+        self.logout()
+
     def get_personal_words(self):
         try:
             query = """
-                SELECT w.id, w.foreign_word, w.translation, w.transcription,
-                       r.quality
+                SELECT w.id, w.foreign_word, w.translation, w.transcription, r.quality
                 FROM words w
-                JOIN reviews r ON w.id = r.word_id AND r.user_id = 2
+                JOIN reviews r ON w.id = r.word_id AND r.user_id = ?
             """
-            rows = self.db.fetch_all(query)
+            rows = self.db.fetch_all(query, (self.user_id,))
             words = []
             for row in rows:
                 quality = row["quality"]
@@ -80,11 +94,8 @@ class WorderApp(QMainWindow):
                     status = "На повторении"
 
                 words.append({
-                    "id": row["id"],
-                    "word": row["foreign_word"],
-                    "trans": row["transcription"] or "",
-                    "ru": row["translation"],
-                    "status": status
+                    "id": row["id"], "word": row["foreign_word"],
+                    "trans": row["transcription"] or "", "ru": row["translation"], "status": status
                 })
             return words
         except Exception as e:
@@ -98,11 +109,8 @@ class WorderApp(QMainWindow):
             words = []
             for row in rows:
                 words.append({
-                    "id": row["id"],
-                    "word": row["foreign_word"],
-                    "trans": row["transcription"] or "",
-                    "ru": row["translation"],
-                    "status": "В справочнике"
+                    "id": row["id"], "word": row["foreign_word"],
+                    "trans": row["transcription"] or "", "ru": row["translation"], "status": "В справочнике"
                 })
             return words
         except Exception as e:
@@ -142,6 +150,11 @@ class WorderApp(QMainWindow):
         btn_all_words = self.create_menu_button("📚 Все слова приложения")
         btn_all_words.clicked.connect(lambda: self.switch_screen(3))
 
+        if self.role == 'admin':
+            btn_admin = self.create_menu_button("⚙️ Администрирование")
+            btn_admin.clicked.connect(lambda: self.switch_screen(self.admin_index))
+            left_column.addWidget(btn_admin)
+
         left_column.addWidget(btn_review)
         left_column.addWidget(btn_learn)
         left_column.addWidget(btn_my_dict)
@@ -179,7 +192,6 @@ class WorderApp(QMainWindow):
 
         stacked_layout.addWidget(self.bg)
         stacked_layout.addWidget(content_widget)
-
         stacked_layout.setCurrentIndex(1)
 
         return screen
@@ -198,13 +210,7 @@ class WorderApp(QMainWindow):
         btn_back = QPushButton("← На главную")
         btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_back.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {styles.COLOR_TEXT_MUTED};
-                border: none;
-                font-size: 14px;
-                text-align: left;
-            }}
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: none; font-size: 14px; text-align: left; }}
             QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
         """)
         btn_back.clicked.connect(lambda: self.switch_screen(0))
@@ -223,11 +229,7 @@ class WorderApp(QMainWindow):
         self.card = QFrame()
         self.card.setFixedSize(500, 300)
         self.card.setStyleSheet(f"""
-            QFrame {{
-                background-color: {styles.COLOR_SURFACE};
-                border-radius: 16px;
-                border: 1px solid {styles.COLOR_BORDER};
-            }}
+            QFrame {{ background-color: {styles.COLOR_SURFACE}; border-radius: 16px; border: 1px solid {styles.COLOR_BORDER}; }}
         """)
 
         card_layout = QVBoxLayout(self.card)
@@ -250,14 +252,7 @@ class WorderApp(QMainWindow):
         btn_show = QPushButton("Показать перевод")
         btn_show.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_show.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {styles.COLOR_ACCENT};
-                color: white;
-                border-radius: 8px;
-                padding: 10px 20px;
-                font-size: 16px;
-                margin-top: 20px;
-            }}
+            QPushButton {{ background-color: {styles.COLOR_ACCENT}; color: white; border-radius: 8px; padding: 10px 20px; font-size: 16px; margin-top: 20px; }}
             QPushButton:hover {{ background-color: #4C6EF5; }}
         """)
         btn_show.clicked.connect(lambda: self.lbl_ru.show())
@@ -286,9 +281,7 @@ class WorderApp(QMainWindow):
         self.rating_layout.addWidget(btn_remembered)
 
         center_area.addLayout(self.rating_layout)
-
         layout.addLayout(center_area, 1)
-
         layout.addWidget(self.create_footer())
 
         return screen
@@ -307,13 +300,7 @@ class WorderApp(QMainWindow):
         btn_back = QPushButton("← На главную")
         btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_back.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {styles.COLOR_TEXT_MUTED};
-                border: none;
-                font-size: 14px;
-                text-align: left;
-            }}
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: none; font-size: 14px; text-align: left; }}
             QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
         """)
         btn_back.clicked.connect(lambda: self.switch_screen(0))
@@ -340,20 +327,9 @@ class WorderApp(QMainWindow):
             combo_filter.addItems(["Все слова"])
 
         combo_filter.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {styles.COLOR_SURFACE};
-                color: {styles.COLOR_TEXT_MAIN};
-                border: 1px solid {styles.COLOR_BORDER};
-                border-radius: 4px;
-                padding: 5px;
-                min-width: 150px;
-            }}
+            QComboBox {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 4px; padding: 5px; min-width: 150px; }}
             QComboBox::drop-down {{ border: none; }}
-            QComboBox QAbstractItemView {{
-                background-color: {styles.COLOR_SURFACE};
-                color: {styles.COLOR_TEXT_MAIN};
-                selection-background-color: {styles.COLOR_ACCENT};
-            }}
+            QComboBox QAbstractItemView {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; selection-background-color: {styles.COLOR_ACCENT}; }}
         """)
 
         filter_layout.addWidget(lbl_filter)
@@ -363,13 +339,7 @@ class WorderApp(QMainWindow):
             btn_reset = QPushButton("Сбросить прогресс")
             btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_reset.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {styles.COLOR_ACCENT};
-                    color: white;
-                    border-radius: 4px;
-                    padding: 5px 15px;
-                    font-weight: bold;
-                }}
+                QPushButton {{ background-color: {styles.COLOR_ACCENT}; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
                 QPushButton:hover {{ background-color: #2C4AB5; }}
             """)
             btn_reset.clicked.connect(self.reset_progress)
@@ -378,13 +348,7 @@ class WorderApp(QMainWindow):
             btn_load_test = QPushButton("Загрузить тестовые слова")
             btn_load_test.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_load_test.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {styles.COLOR_SUCCESS};
-                    color: white;
-                    border-radius: 4px;
-                    padding: 5px 15px;
-                    font-weight: bold;
-                }}
+                QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
                 QPushButton:hover {{ background-color: #1E6B31; }}
             """)
             btn_load_test.clicked.connect(self.load_test_words)
@@ -399,24 +363,9 @@ class WorderApp(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {styles.COLOR_SURFACE};
-                color: {styles.COLOR_TEXT_MAIN};
-                border: 1px solid {styles.COLOR_BORDER};
-                border-radius: 8px;
-                gridline-color: {styles.COLOR_BORDER};
-                margin: 0 40px 20px 40px;
-            }}
-            QHeaderView::section {{
-                background-color: {styles.COLOR_BG};
-                color: {styles.COLOR_TEXT_MAIN};
-                border: none;
-                padding: 5px;
-                font-weight: bold;
-            }}
-            QTableWidget::item {{
-                padding: 10px;
-            }}
+            QTableWidget {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; gridline-color: {styles.COLOR_BORDER}; margin: 0 40px 20px 40px; }}
+            QHeaderView::section {{ background-color: {styles.COLOR_BG}; color: {styles.COLOR_TEXT_MAIN}; border: none; padding: 5px; font-weight: bold; }}
+            QTableWidget::item {{ padding: 10px; }}
         """)
 
         layout.addWidget(table)
@@ -429,6 +378,64 @@ class WorderApp(QMainWindow):
         else:
             self.all_table = table
             self.all_combo = combo_filter
+
+        return screen
+
+    def create_admin_screen(self):
+        screen = QWidget()
+        layout = QVBoxLayout(screen)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        layout.addWidget(self.create_header())
+
+        breadcrumb_layout = QHBoxLayout()
+        breadcrumb_layout.setContentsMargins(40, 20, 40, 20)
+
+        btn_back = QPushButton("← На главную")
+        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_back.setStyleSheet(f"""
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: none; font-size: 14px; text-align: left; }}
+            QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
+        """)
+        btn_back.clicked.connect(lambda: self.switch_screen(0))
+
+        breadcrumbs = QLabel("Главная > Администрирование")
+        breadcrumbs.setStyleSheet(f"color: {styles.COLOR_TEXT_MUTED};")
+
+        breadcrumb_layout.addWidget(btn_back)
+        breadcrumb_layout.addStretch()
+        breadcrumb_layout.addWidget(breadcrumbs)
+        layout.addLayout(breadcrumb_layout)
+
+        info_label = QLabel("Управление пользователями")
+        info_label.setStyleSheet(
+            f"font-family: {styles.FONT_HEADER}; font-size: 20px; font-weight: bold; margin-left: 40px; margin-bottom: 10px;")
+        layout.addWidget(info_label)
+
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Логин", "Роль", "ID"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setStyleSheet(f"""
+            QTableWidget {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; gridline-color: {styles.COLOR_BORDER}; margin: 0 40px 20px 40px; }}
+            QHeaderView::section {{ background-color: {styles.COLOR_BG}; color: {styles.COLOR_TEXT_MAIN}; border: none; padding: 5px; font-weight: bold; }}
+            QTableWidget::item {{ padding: 10px; }}
+        """)
+
+        try:
+            users = self.db.fetch_all("SELECT id, username, role FROM users")
+            table.setRowCount(len(users))
+            for i, u in enumerate(users):
+                table.setItem(i, 0, QTableWidgetItem(u['username']))
+                table.setItem(i, 1, QTableWidgetItem(u['role']))
+                table.setItem(i, 2, QTableWidgetItem(str(u['id'])))
+        except Exception as e:
+            print(f"Ошибка загрузки пользователей: {e}")
+
+        layout.addWidget(table)
+        layout.addWidget(self.create_footer())
 
         return screen
 
@@ -463,28 +470,17 @@ class WorderApp(QMainWindow):
 
     def load_test_words(self):
         test_words = [
-            (1, 'Apple', 'Яблоко', '[ˈæp.əl]', 1),
-            (2, 'Bread', 'Хлеб', '[bred]', 1),
-            (3, 'Cheese', 'Сыр', '[tʃiːz]', 1),
-            (4, 'Water', 'Вода', '[ˈwɔːtər]', 1),
-            (5, 'Meat', 'Мясо', '[miːt]', 1),
-            (6, 'Airport', 'Аэропорт', '[ˈeəpɔːt]', 2),
-            (7, 'Ticket', 'Билет', '[ˈtɪkɪt]', 2),
-            (8, 'Luggage', 'Багаж', '[ˈlʌɡɪdʒ]', 2),
-            (9, 'Passport', 'Паспорт', '[ˈpɑːspɔːt]', 2),
-            (10, 'Hotel', 'Отель', '[həʊˈtel]', 2),
-            (11, 'Train', 'Поезд', '[treɪn]', 2),
-            (12, 'Car', 'Машина', '[kɑːr]', 2),
-            (13, 'Road', 'Дорога', '[rəʊd]', 2),
-            (14, 'City', 'Город', '[ˈsɪti]', 2),
-            (15, 'Country', 'Страна', '[ˈkʌntri]', 2),
-            (16, 'Friend', 'Друг', '[frend]', 2),
-            (17, 'Family', 'Семья', '[ˈfæməli]', 2),
-            (18, 'Work', 'Работа', '[wɜːrk]', 2),
-            (19, 'Money', 'Деньги', '[ˈmʌni]', 2),
-            (20, 'Time', 'Время', '[taɪm]', 2),
+            (1, 'Apple', 'Яблоко', '[ˈæp.əl]', 1), (2, 'Bread', 'Хлеб', '[bred]', 1),
+            (3, 'Cheese', 'Сыр', '[tʃiːz]', 1), (4, 'Water', 'Вода', '[ˈwɔːtər]', 1),
+            (5, 'Meat', 'Мясо', '[miːt]', 1), (6, 'Airport', 'Аэропорт', '[ˈeəpɔːt]', 2),
+            (7, 'Ticket', 'Билет', '[ˈtɪkɪt]', 2), (8, 'Luggage', 'Багаж', '[ˈlʌɡɪdʒ]', 2),
+            (9, 'Passport', 'Паспорт', '[ˈpɑːspɔːt]', 2), (10, 'Hotel', 'Отель', '[həʊˈtel]', 2),
+            (11, 'Train', 'Поезд', '[treɪn]', 2), (12, 'Car', 'Машина', '[kɑːr]', 2),
+            (13, 'Road', 'Дорога', '[rəʊd]', 2), (14, 'City', 'Город', '[ˈsɪti]', 2),
+            (15, 'Country', 'Страна', '[ˈkʌntri]', 2), (16, 'Friend', 'Друг', '[frend]', 2),
+            (17, 'Family', 'Семья', '[ˈfæməli]', 2), (18, 'Work', 'Работа', '[wɜːrk]', 2),
+            (19, 'Money', 'Деньги', '[ˈmʌni]', 2), (20, 'Time', 'Время', '[taɪm]', 2),
         ]
-
         try:
             for w in test_words:
                 query = "INSERT OR IGNORE INTO words (id, foreign_word, translation, transcription, collection_id) VALUES (?, ?, ?, ?, ?)"
@@ -499,19 +495,16 @@ class WorderApp(QMainWindow):
                                      'Удалить ВСЕ слова из вашего личного словаря и сбросить прогресс?',
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                      QMessageBox.StandardButton.No)
-
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                self.db.execute_query("DELETE FROM reviews")
+                self.db.execute_query("DELETE FROM reviews WHERE user_id = ?", (self.user_id,))
                 self.filter_table(self.my_table, self.my_combo, True)
-                print("Прогресс успешно сброшен.")
             except Exception as e:
                 print(f"Ошибка сброса прогресса: {e}")
 
     def start_training(self):
         all_words = self.get_all_words()
         personal_words = self.get_personal_words()
-
         personal_ids = {w["id"] for w in personal_words}
         words_to_learn = [w for w in all_words if w["id"] not in personal_ids]
 
@@ -525,8 +518,7 @@ class WorderApp(QMainWindow):
         self.switch_screen(1)
 
     def update_card(self):
-        if not self.words:
-            return
+        if not self.words: return
         word_data = self.words[self.current_word_index]
         self.lbl_ru.hide()
         self.lbl_word.setText(word_data["word"])
@@ -550,24 +542,16 @@ class WorderApp(QMainWindow):
 
         layout.addStretch()
 
-        user_label = QLabel("User 👤")
+        user_label = QLabel(f"{self.username} ({self.role}) 👤")
         user_label.setStyleSheet(f"color: {styles.COLOR_TEXT_MAIN}; font-size: 14px; border: none;")
 
         btn_logout = QPushButton("Выйти")
         btn_logout.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_logout.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {styles.COLOR_TEXT_MUTED};
-                border: 1px solid {styles.COLOR_TEXT_MUTED};
-                border-radius: 4px;
-                padding: 5px 10px;
-            }}
-            QPushButton:hover {{
-                color: {styles.COLOR_TEXT_MAIN};
-                border-color: {styles.COLOR_TEXT_MAIN};
-            }}
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: 1px solid {styles.COLOR_TEXT_MUTED}; border-radius: 4px; padding: 5px 10px; }}
+            QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; border-color: {styles.COLOR_TEXT_MAIN}; }}
         """)
+        btn_logout.clicked.connect(self.logout)
 
         layout.addWidget(user_label)
         layout.addWidget(btn_logout)
@@ -578,23 +562,9 @@ class WorderApp(QMainWindow):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFixedHeight(50)
         btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {styles.COLOR_SURFACE};
-                color: {styles.COLOR_TEXT_MAIN};
-                border: 1px solid {styles.COLOR_BORDER};
-                border-radius: 8px;
-                text-align: left;
-                padding-left: 20px;
-                font-size: 16px;
-            }}
-            QPushButton:hover {{
-                background-color: {styles.COLOR_ACCENT};
-                border-color: {styles.COLOR_ACCENT};
-                color: white;
-            }}
-            QPushButton:pressed {{
-                background-color: #2C4AB5;
-            }}
+            QPushButton {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; text-align: left; padding-left: 20px; font-size: 16px; }}
+            QPushButton:hover {{ background-color: {styles.COLOR_ACCENT}; border-color: {styles.COLOR_ACCENT}; color: white; }}
+            QPushButton:pressed {{ background-color: #2C4AB5; }}
         """)
         return btn
 
@@ -603,18 +573,8 @@ class WorderApp(QMainWindow):
         btn.setFixedSize(150, 50)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {color};
-                border: 2px solid {color};
-                border-radius: 8px;
-                font-size: 16px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {color};
-                color: white;
-            }}
+            QPushButton {{ background-color: transparent; color: {color}; border: 2px solid {color}; border-radius: 8px; font-size: 16px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: {color}; color: white; }}
         """)
         return btn
 
@@ -640,42 +600,36 @@ class WorderApp(QMainWindow):
             self.filter_table(self.all_table, self.all_combo, False)
 
     def handle_answer(self, quality):
-        if not self.words:
-            return
-
+        if not self.words: return
         current_word = self.words[self.current_word_index]
         word_id = current_word["id"]
 
         try:
-            check_query = "SELECT id FROM reviews WHERE word_id = ? AND user_id = 2"
-            existing = self.db.fetch_all(check_query, (word_id,))
+            check_query = "SELECT id FROM reviews WHERE word_id = ? AND user_id = ?"
+            existing = self.db.fetch_all(check_query, (word_id, self.user_id))
 
             interval = 1 if quality < 3 else 3
             next_date = (datetime.datetime.now() + datetime.timedelta(days=interval)).strftime('%Y-%m-%d %H:%M:%S')
 
             if existing:
-                update_query = """
-                    UPDATE reviews 
-                    SET quality = ?, next_review_date = ?, interval_days = ?
-                    WHERE word_id = ? AND user_id = 2
-                """
-                self.db.execute_query(update_query, (quality, next_date, interval, word_id))
+                update_query = "UPDATE reviews SET quality = ?, next_review_date = ?, interval_days = ? WHERE word_id = ? AND user_id = ?"
+                self.db.execute_query(update_query, (quality, next_date, interval, word_id, self.user_id))
             else:
-                insert_query = """
-                    INSERT INTO reviews (word_id, user_id, quality, next_review_date, interval_days)
-                    VALUES (?, ?, ?, ?, ?)
-                """
-                self.db.execute_query(insert_query, (word_id, 2, quality, next_date, interval))
-
+                insert_query = "INSERT INTO reviews (word_id, user_id, quality, next_review_date, interval_days) VALUES (?, ?, ?, ?, ?)"
+                self.db.execute_query(insert_query, (word_id, self.user_id, quality, next_date, interval))
         except Exception as e:
             print(f"Ошибка записи в БД: {e}")
 
         self.current_word_index = (self.current_word_index + 1) % len(self.words)
         self.update_card()
 
+    def logout(self):
+        self.hide()
+        global_login_window.show()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = WorderApp()
-    window.show()
+    global_login_window = LoginWindow(WorderApp)
+    global_login_window.show()
     sys.exit(app.exec())
