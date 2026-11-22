@@ -1,8 +1,9 @@
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QLabel, QPushButton, QFrame,
+                             QHBoxLayout, QLabel, QPushButton, QFrame, QLineEdit,
                              QStackedWidget, QStackedLayout, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QComboBox, QMessageBox)
+                             QTableWidgetItem, QHeaderView, QComboBox, QMessageBox,
+                             QDialog, QDialogButtonBox, QTabWidget, QFormLayout)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QCloseEvent
 import styles
@@ -345,14 +346,24 @@ class WorderApp(QMainWindow):
             btn_reset.clicked.connect(self.reset_progress)
             filter_layout.addWidget(btn_reset)
         else:
-            btn_load_test = QPushButton("Загрузить тестовые слова")
-            btn_load_test.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_load_test.setStyleSheet(f"""
-                QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
-                QPushButton:hover {{ background-color: #1E6B31; }}
-            """)
-            btn_load_test.clicked.connect(self.load_test_words)
-            filter_layout.addWidget(btn_load_test)
+            if self.role == 'admin':
+                btn_add = QPushButton("➕ Добавить слово")
+                btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_add.setStyleSheet(f"""
+                    QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
+                    QPushButton:hover {{ background-color: #1E6B31; }}
+                """)
+                btn_add.clicked.connect(self.open_add_word_dialog)
+                filter_layout.addWidget(btn_add)
+            else:
+                btn_load_test = QPushButton("Загрузить тестовые слова")
+                btn_load_test.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_load_test.setStyleSheet(f"""
+                    QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
+                    QPushButton:hover {{ background-color: #1E6B31; }}
+                """)
+                btn_load_test.clicked.connect(self.load_test_words)
+                filter_layout.addWidget(btn_load_test)
 
         filter_layout.addStretch()
         layout.addLayout(filter_layout)
@@ -381,6 +392,22 @@ class WorderApp(QMainWindow):
 
         return screen
 
+    def open_add_word_dialog(self):
+        dialog = AddWordDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            data = dialog.get_data()
+            if not data["word"] or not data["ru"]:
+                QMessageBox.warning(self, "Ошибка", "Слово и перевод обязательны!")
+                return
+
+            try:
+                query = "INSERT INTO words (foreign_word, translation, transcription, collection_id) VALUES (?, ?, ?, 1)"
+                self.db.execute_query(query, (data["word"], data["ru"], data["trans"]))
+                self.filter_table(self.all_table, self.all_combo, False)
+                QMessageBox.information(self, "Успех", f"Слово '{data['word']}' добавлено!")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка БД", str(e))
+
     def create_admin_screen(self):
         screen = QWidget()
         layout = QVBoxLayout(screen)
@@ -389,29 +416,30 @@ class WorderApp(QMainWindow):
 
         layout.addWidget(self.create_header())
 
-        breadcrumb_layout = QHBoxLayout()
-        breadcrumb_layout.setContentsMargins(40, 20, 40, 20)
-
-        btn_back = QPushButton("← На главную")
-        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_back.setStyleSheet(f"""
-            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: none; font-size: 14px; text-align: left; }}
-            QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
+        tabs = QTabWidget()
+        tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; margin: 0 40px 20px 40px; }}
+            QTabBar::tab {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; padding: 10px 20px; border: 1px solid {styles.COLOR_BORDER}; border-bottom: none; border-top-left-radius: 8px; border-top-right-radius: 8px; }}
+            QTabBar::tab:selected {{ background-color: {styles.COLOR_ACCENT}; color: white; }}
         """)
-        btn_back.clicked.connect(lambda: self.switch_screen(0))
 
-        breadcrumbs = QLabel("Главная > Администрирование")
-        breadcrumbs.setStyleSheet(f"color: {styles.COLOR_TEXT_MUTED};")
+        users_tab = self._create_admin_users_tab()
+        add_word_tab = self._create_admin_add_word_tab()
+        stats_tab = self._create_admin_stats_tab()
 
-        breadcrumb_layout.addWidget(btn_back)
-        breadcrumb_layout.addStretch()
-        breadcrumb_layout.addWidget(breadcrumbs)
-        layout.addLayout(breadcrumb_layout)
+        tabs.addTab(users_tab, "Пользователи")
+        tabs.addTab(add_word_tab, "Добавить слово")
+        tabs.addTab(stats_tab, "Статистика БД")
 
-        info_label = QLabel("Управление пользователями")
-        info_label.setStyleSheet(
-            f"font-family: {styles.FONT_HEADER}; font-size: 20px; font-weight: bold; margin-left: 40px; margin-bottom: 10px;")
-        layout.addWidget(info_label)
+        layout.addWidget(tabs, 1)
+        layout.addWidget(self.create_footer())
+
+        return screen
+
+    def _create_admin_users_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         table = QTableWidget()
         table.setColumnCount(3)
@@ -419,7 +447,7 @@ class WorderApp(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setStyleSheet(f"""
-            QTableWidget {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; gridline-color: {styles.COLOR_BORDER}; margin: 0 40px 20px 40px; }}
+            QTableWidget {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; gridline-color: {styles.COLOR_BORDER}; }}
             QHeaderView::section {{ background-color: {styles.COLOR_BG}; color: {styles.COLOR_TEXT_MAIN}; border: none; padding: 5px; font-weight: bold; }}
             QTableWidget::item {{ padding: 10px; }}
         """)
@@ -435,9 +463,107 @@ class WorderApp(QMainWindow):
             print(f"Ошибка загрузки пользователей: {e}")
 
         layout.addWidget(table)
-        layout.addWidget(self.create_footer())
+        return widget
 
-        return screen
+    def _create_admin_add_word_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(15)
+
+        info = QLabel("Добавление нового слова в общий справочник")
+        info.setStyleSheet(f"font-family: {styles.FONT_HEADER}; font-size: 18px; font-weight: bold;")
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.admin_input_word = QLineEdit()
+        self.admin_input_word.setPlaceholderText("Иностранное слово")
+        self.admin_input_word.setStyleSheet(f"""
+            QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; padding: 10px; }}
+        """)
+
+        self.admin_input_trans = QLineEdit()
+        self.admin_input_trans.setPlaceholderText("Транскрипция")
+        self.admin_input_trans.setStyleSheet(f"""
+            QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; padding: 10px; }}
+        """)
+
+        self.admin_input_ru = QLineEdit()
+        self.admin_input_ru.setPlaceholderText("Перевод")
+        self.admin_input_ru.setStyleSheet(f"""
+            QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; padding: 10px; }}
+        """)
+
+        form.addRow("Слово:", self.admin_input_word)
+        form.addRow("Транскрипция:", self.admin_input_trans)
+        form.addRow("Перевод:", self.admin_input_ru)
+        layout.addLayout(form)
+
+        btn_save = QPushButton("Сохранить слово")
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.setFixedHeight(50)
+        btn_save.setStyleSheet(f"""
+            QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: #1E6B31; }}
+        """)
+        btn_save.clicked.connect(self.save_word_from_admin)
+        layout.addWidget(btn_save)
+        layout.addStretch()
+
+        return widget
+
+    def save_word_from_admin(self):
+        word = self.admin_input_word.text().strip()
+        trans = self.admin_input_trans.text().strip()
+        ru = self.admin_input_ru.text().strip()
+
+        if not word or not ru:
+            QMessageBox.warning(self, "Ошибка", "Слово и перевод обязательны!")
+            return
+
+        try:
+            query = "INSERT INTO words (foreign_word, translation, transcription, collection_id) VALUES (?, ?, ?, 1)"
+            self.db.execute_query(query, (word, ru, trans))
+            self.admin_input_word.clear()
+            self.admin_input_trans.clear()
+            self.admin_input_ru.clear()
+            QMessageBox.information(self, "Успех", f"Слово '{word}' успешно добавлено!")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка БД", str(e))
+
+    def _create_admin_stats_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(15)
+
+        info = QLabel("Общая статистика системы")
+        info.setStyleSheet(f"font-family: {styles.FONT_HEADER}; font-size: 18px; font-weight: bold;")
+        layout.addWidget(info)
+
+        try:
+            total_words = self.db.fetch_one("SELECT COUNT(*) as count FROM words")['count']
+            total_users = self.db.fetch_one("SELECT COUNT(*) as count FROM users")['count']
+            total_reviews = self.db.fetch_one("SELECT COUNT(*) as count FROM reviews")['count']
+        except:
+            total_words = total_users = total_reviews = 0
+
+        stats_text = f"""
+        <div style='font-size: 16px; line-height: 2;'>
+            <b>Всего слов в справочнике:</b> {total_words}<br>
+            <b>Зарегистрировано пользователей:</b> {total_users}<br>
+            <b>Всего проведено тренировок:</b> {total_reviews}
+        </div>
+        """
+
+        stats_label = QLabel(stats_text)
+        stats_label.setStyleSheet(f"color: {styles.COLOR_TEXT_MAIN};")
+        layout.addWidget(stats_label)
+        layout.addStretch()
+
+        return widget
 
     def update_table(self, table, word_list):
         table.setRowCount(len(word_list))
