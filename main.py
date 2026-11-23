@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QStackedWidget, QStackedLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QComboBox, QMessageBox,
                              QDialog, QDialogButtonBox, QTabWidget, QFormLayout)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QCloseEvent
 import styles
 from database.db_manager import DatabaseManager
@@ -224,8 +224,8 @@ class WorderApp(QMainWindow):
         breadcrumb_layout.addWidget(breadcrumbs)
         layout.addLayout(breadcrumb_layout)
 
-        center_area = QVBoxLayout()
-        center_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.center_area = QVBoxLayout()
+        self.center_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.card = QFrame()
         self.card.setFixedSize(500, 300)
@@ -263,7 +263,7 @@ class WorderApp(QMainWindow):
         card_layout.addWidget(self.lbl_ru)
         card_layout.addWidget(btn_show)
 
-        center_area.addWidget(self.card)
+        self.center_area.addWidget(self.card)
 
         self.rating_layout = QHBoxLayout()
         self.rating_layout.setSpacing(20)
@@ -281,8 +281,8 @@ class WorderApp(QMainWindow):
         self.rating_layout.addWidget(btn_again)
         self.rating_layout.addWidget(btn_remembered)
 
-        center_area.addLayout(self.rating_layout)
-        layout.addLayout(center_area, 1)
+        self.center_area.addLayout(self.rating_layout)
+        layout.addLayout(self.center_area, 1)
         layout.addWidget(self.create_footer())
 
         return screen
@@ -631,16 +631,34 @@ class WorderApp(QMainWindow):
     def start_training(self):
         all_words = self.get_all_words()
         personal_words = self.get_personal_words()
-        personal_ids = {w["id"] for w in personal_words}
-        words_to_learn = [w for w in all_words if w["id"] not in personal_ids]
+
+        if not all_words:
+            QMessageBox.warning(self, "Внимание", "Справочник пуст! Добавьте слова через админ-панель.")
+            return
+
+        finished_ids = {w["id"] for w in personal_words if w["status"] in ["Выучено", "Уже известно"]}
+        words_to_learn = [w for w in all_words if w["id"] not in finished_ids]
 
         if not words_to_learn:
-            QMessageBox.information(self, "Обучение завершено", "Вы изучили все доступные слова из справочника!")
-            return
+            reply = QMessageBox.question(
+                self,
+                "Обучение завершено",
+                "Вы изучили все доступные слова из справочника!\n\nСбросить прогресс и начать заново?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                try:
+                    self.db.execute_query("DELETE FROM reviews WHERE user_id = ?", (self.user_id,))
+                    words_to_learn = all_words
+                except Exception as e:
+                    print(f"Ошибка сброса: {e}")
+            else:
+                return
 
         self.words = words_to_learn
         self.current_word_index = 0
         self.update_card()
+        self.animate_card()
         self.switch_screen(1)
 
     def update_card(self):
@@ -650,6 +668,16 @@ class WorderApp(QMainWindow):
         self.lbl_word.setText(word_data["word"])
         self.lbl_transcription.setText(word_data["trans"])
         self.lbl_ru.setText(word_data["ru"])
+
+    def animate_card(self):
+        self.card.setWindowOpacity(0.0)
+
+        self.fade_in = QPropertyAnimation(self.card, b"windowOpacity")
+        self.fade_in.setDuration(400)
+        self.fade_in.setStartValue(0.0)
+        self.fade_in.setEndValue(1.0)
+        self.fade_in.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.fade_in.start()
 
     def create_header(self):
         header = QFrame()
@@ -748,6 +776,7 @@ class WorderApp(QMainWindow):
 
         self.current_word_index = (self.current_word_index + 1) % len(self.words)
         self.update_card()
+        self.animate_card()
 
     def logout(self):
         self.hide()

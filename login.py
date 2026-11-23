@@ -11,9 +11,15 @@ class LoginWindow(QWidget):
     def __init__(self, main_app_class):
         super().__init__()
         self.main_app_class = main_app_class
+        self.main_window_instance = None
+
         self.setWindowTitle("Worder — Вход")
         self.setFixedSize(400, 500)
         self.setStyleSheet(styles.MAIN_STYLE)
+
+        app = QApplication.instance()
+        if app:
+            app.setQuitOnLastWindowClosed(False)
 
         self.db = DatabaseManager()
         self.db.connect()
@@ -111,8 +117,8 @@ class LoginWindow(QWidget):
 
                 self.log_action("LOGIN_SUCCESS")
 
-                app_instance = self.main_app_class(self.user_id, self.username, self.role)
-                app_instance.show()
+                self.main_window_instance = self.main_app_class(self.user_id, self.username, self.role)
+                self.main_window_instance.show()
                 self.hide()
             else:
                 self.log_action("LOGIN_FAILED")
