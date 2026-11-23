@@ -1,10 +1,11 @@
 import sys
+import re
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QFrame, QLineEdit,
                              QStackedWidget, QStackedLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QComboBox, QMessageBox,
                              QDialog, QDialogButtonBox, QTabWidget, QFormLayout)
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QCloseEvent
 import styles
 from database.db_manager import DatabaseManager
@@ -54,21 +55,28 @@ class WorderApp(QMainWindow):
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
 
+        # Создаем экраны
         self.dashboard_screen = self.create_dashboard()
         self.training_screen = self.create_training_screen()
         self.my_dict_screen = self.create_dict_screen(is_personal=True)
         self.all_words_screen = self.create_dict_screen(is_personal=False)
+        self.about_screen = self.create_about_screen()
 
+        # Фиксируем индексы базовых экранов
+        self.stacked_widget.addWidget(self.dashboard_screen)  # 0
+        self.stacked_widget.addWidget(self.training_screen)  # 1
+        self.stacked_widget.addWidget(self.my_dict_screen)  # 2
+        self.stacked_widget.addWidget(self.all_words_screen)  # 3
+        self.stacked_widget.addWidget(self.about_screen)  # 4
+
+        self.about_index = 4
         self.admin_index = -1
+
+        # Админка всегда добавляется последней, чтобы не сбить индексы
         if self.role == 'admin':
             self.admin_screen = self.create_admin_screen()
-            self.admin_index = 4
-            self.stacked_widget.addWidget(self.admin_screen)
-
-        self.stacked_widget.addWidget(self.dashboard_screen)
-        self.stacked_widget.addWidget(self.training_screen)
-        self.stacked_widget.addWidget(self.my_dict_screen)
-        self.stacked_widget.addWidget(self.all_words_screen)
+            self.stacked_widget.addWidget(self.admin_screen)  # 5
+            self.admin_index = 5
 
         self.stacked_widget.setCurrentIndex(0)
 
@@ -117,6 +125,48 @@ class WorderApp(QMainWindow):
         except Exception as e:
             print(f"Ошибка загрузки справочника: {e}")
             return []
+
+    def get_stats_data(self):
+        try:
+            review_count = \
+            self.db.fetch_one("SELECT COUNT(*) as count FROM reviews WHERE user_id = ?", (self.user_id,))['count']
+
+            repeating = self.db.fetch_one(
+                "SELECT COUNT(*) as count FROM reviews WHERE user_id = ? AND quality NOT IN (4, 5)",
+                (self.user_id,)
+            )['count']
+
+            learned = self.db.fetch_one(
+                "SELECT COUNT(*) as count FROM reviews WHERE user_id = ? AND quality = 4",
+                (self.user_id,)
+            )['count']
+
+            known = self.db.fetch_one(
+                "SELECT COUNT(*) as count FROM reviews WHERE user_id = ? AND quality = 5",
+                (self.user_id,)
+            )['count']
+
+            return {
+                "total": review_count,
+                "repeating": repeating,
+                "learned": learned,
+                "known": known
+            }
+        except Exception as e:
+            print(f"Ошибка получения статистики: {e}")
+            return {"total": 0, "repeating": 0, "learned": 0, "known": 0}
+
+    def update_dashboard_stats(self):
+        stats = self.get_stats_data()
+        stats_html = f"""
+        <div style='font-family: {styles.FONT_HEADER}; color: {styles.COLOR_TEXT_MAIN};'>
+            <div style='font-size: 24px; font-weight: bold; margin-bottom: 10px;'>Всего изучено: {stats["total"]}</div>
+            <div style='font-size: 14px; color: {styles.COLOR_ACCENT};'>🔄 На повторении: {stats["repeating"]}</div>
+            <div style='font-size: 14px; color: {styles.COLOR_SUCCESS};'>✅ Выучено: {stats["learned"]}</div>
+            <div style='font-size: 14px; color: {styles.COLOR_TEXT_MUTED};'>💡 Уже известно: {stats["known"]}</div>
+        </div>
+        """
+        self.lbl_stats_words.setText(stats_html)
 
     def create_dashboard(self):
         screen = QWidget()
@@ -174,12 +224,20 @@ class WorderApp(QMainWindow):
         lbl_stats_title = QLabel("Статистика за неделю")
         lbl_stats_title.setStyleSheet(f"color: {styles.COLOR_TEXT_MUTED}; font-size: 14px;")
 
-        lbl_stats_words = QLabel("Изучено слов: 48")
-        lbl_stats_words.setStyleSheet(
-            f"color: {styles.COLOR_TEXT_MAIN}; font-family: {styles.FONT_HEADER}; font-size: 24px; font-weight: bold;")
+        stats = self.get_stats_data()
+        stats_html = f"""
+        <div style='font-family: {styles.FONT_HEADER}; color: {styles.COLOR_TEXT_MAIN};'>
+            <div style='font-size: 24px; font-weight: bold; margin-bottom: 10px;'>Всего изучено: {stats["total"]}</div>
+            <div style='font-size: 14px; color: {styles.COLOR_ACCENT};'>🔄 На повторении: {stats["repeating"]}</div>
+            <div style='font-size: 14px; color: {styles.COLOR_SUCCESS};'>✅ Выучено: {stats["learned"]}</div>
+            <div style='font-size: 14px; color: {styles.COLOR_TEXT_MUTED};'>💡 Уже известно: {stats["known"]}</div>
+        </div>
+        """
+        self.lbl_stats_words = QLabel(stats_html)
+        self.lbl_stats_words.setTextFormat(Qt.TextFormat.RichText)
 
         stats_layout.addWidget(lbl_stats_title)
-        stats_layout.addWidget(lbl_stats_words)
+        stats_layout.addWidget(self.lbl_stats_words)
         stats_layout.addStretch()
 
         right_column.addWidget(stats_panel)
@@ -400,6 +458,10 @@ class WorderApp(QMainWindow):
                 QMessageBox.warning(self, "Ошибка", "Слово и перевод обязательны!")
                 return
 
+            if not re.search(r'[a-zA-Zа-яА-Я]', data["word"]):
+                QMessageBox.warning(self, "Ошибка", "Слово должно содержать буквы!")
+                return
+
             try:
                 query = "INSERT INTO words (foreign_word, translation, transcription, collection_id) VALUES (?, ?, ?, 1)"
                 self.db.execute_query(query, (data["word"], data["ru"], data["trans"]))
@@ -523,6 +585,10 @@ class WorderApp(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Слово и перевод обязательны!")
             return
 
+        if not re.search(r'[a-zA-Zа-яА-Я]', word):
+            QMessageBox.warning(self, "Ошибка", "Слово должно содержать буквы!")
+            return
+
         try:
             query = "INSERT INTO words (foreign_word, translation, transcription, collection_id) VALUES (?, ?, ?, 1)"
             self.db.execute_query(query, (word, ru, trans))
@@ -564,6 +630,77 @@ class WorderApp(QMainWindow):
         layout.addStretch()
 
         return widget
+
+    def create_about_screen(self):
+        screen = QWidget()
+        layout = QVBoxLayout(screen)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        layout.addWidget(self.create_header())
+
+        breadcrumb_layout = QHBoxLayout()
+        breadcrumb_layout.setContentsMargins(40, 20, 40, 20)
+
+        btn_back = QPushButton("← На главную")
+        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_back.setStyleSheet(f"""
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: none; font-size: 14px; text-align: left; }}
+            QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
+        """)
+        btn_back.clicked.connect(lambda: self.switch_screen(0))
+
+        breadcrumbs = QLabel("Главная > О программе")
+        breadcrumbs.setStyleSheet(f"color: {styles.COLOR_TEXT_MUTED};")
+
+        breadcrumb_layout.addWidget(btn_back)
+        breadcrumb_layout.addStretch()
+        breadcrumb_layout.addWidget(breadcrumbs)
+        layout.addLayout(breadcrumb_layout)
+
+        about_container = QFrame()
+        about_container.setStyleSheet(
+            f"background-color: {styles.COLOR_SURFACE}; border-radius: 16px; border: 1px solid {styles.COLOR_BORDER}; margin: 40px;")
+        about_layout = QVBoxLayout(about_container)
+        about_layout.setContentsMargins(60, 60, 60, 60)
+        about_layout.setSpacing(20)
+        about_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("Worder")
+        title.setStyleSheet(
+            f"font-family: {styles.FONT_HEADER}; font-size: 48px; font-weight: bold; color: {styles.COLOR_TEXT_MAIN};")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        about_layout.addWidget(title)
+
+        subtitle = QLabel("Тренажёр иностранных слов с интервальным повторением")
+        subtitle.setStyleSheet(f"font-size: 18px; color: {styles.COLOR_TEXT_MUTED};")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        about_layout.addWidget(subtitle)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"background-color: {styles.COLOR_BORDER}; max-height: 1px; margin: 20px 0;")
+        about_layout.addWidget(divider)
+
+        info_text = f"""
+        <div style='text-align: center; font-size: 16px; line-height: 2.2; color: {styles.COLOR_TEXT_MAIN};'>
+            <b>Разработчик:</b> Бокштай П.Е.<br>
+            <b>Группа:</b> 22о<br>
+            <b>Стек технологий:</b> Python 3.11, PyQt6, SQLite3, bcrypt<br>
+            <b>Алгоритм повторения:</b> Упрощённый SM-2<br>
+            <b>Версия:</b> 1.0.0
+        </div>
+        """
+        info_label = QLabel(info_text)
+        info_label.setTextFormat(Qt.TextFormat.RichText)
+        about_layout.addWidget(info_label)
+
+        about_layout.addStretch()
+        layout.addWidget(about_container, 1)
+        layout.addWidget(self.create_footer())
+
+        self.about_container = about_container
+        return screen
 
     def update_table(self, table, word_list):
         table.setRowCount(len(word_list))
@@ -625,6 +762,7 @@ class WorderApp(QMainWindow):
             try:
                 self.db.execute_query("DELETE FROM reviews WHERE user_id = ?", (self.user_id,))
                 self.filter_table(self.my_table, self.my_combo, True)
+                self.update_dashboard_stats()
             except Exception as e:
                 print(f"Ошибка сброса прогресса: {e}")
 
@@ -650,6 +788,7 @@ class WorderApp(QMainWindow):
                 try:
                     self.db.execute_query("DELETE FROM reviews WHERE user_id = ?", (self.user_id,))
                     words_to_learn = all_words
+                    self.update_dashboard_stats()
                 except Exception as e:
                     print(f"Ошибка сброса: {e}")
             else:
@@ -695,6 +834,15 @@ class WorderApp(QMainWindow):
         layout.addWidget(logo)
 
         layout.addStretch()
+
+        btn_about = QPushButton("ℹ️ О программе")
+        btn_about.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_about.setStyleSheet(f"""
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_TEXT_MUTED}; border: none; font-size: 14px; }}
+            QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
+        """)
+        btn_about.clicked.connect(lambda: self.switch_screen(self.about_index))
+        layout.addWidget(btn_about)
 
         user_label = QLabel(f"{self.username} ({self.role}) 👤")
         user_label.setStyleSheet(f"color: {styles.COLOR_TEXT_MAIN}; font-size: 14px; border: none;")
@@ -752,6 +900,18 @@ class WorderApp(QMainWindow):
             self.filter_table(self.my_table, self.my_combo, True)
         elif index == 3:
             self.filter_table(self.all_table, self.all_combo, False)
+        elif index == self.about_index:
+            self.animate_about()
+
+    def animate_about(self):
+        self.about_container.setWindowOpacity(0.0)
+
+        self.fade_in_about = QPropertyAnimation(self.about_container, b"windowOpacity")
+        self.fade_in_about.setDuration(500)
+        self.fade_in_about.setStartValue(0.0)
+        self.fade_in_about.setEndValue(1.0)
+        self.fade_in_about.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.fade_in_about.start()
 
     def handle_answer(self, quality):
         if not self.words: return
@@ -777,6 +937,7 @@ class WorderApp(QMainWindow):
         self.current_word_index = (self.current_word_index + 1) % len(self.words)
         self.update_card()
         self.animate_card()
+        self.update_dashboard_stats()
 
     def logout(self):
         self.hide()
