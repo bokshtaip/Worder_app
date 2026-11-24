@@ -1,5 +1,8 @@
 import sys
 import re
+import csv
+import shutil
+import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QFrame, QLineEdit,
                              QStackedWidget, QStackedLayout, QTableWidget,
@@ -16,25 +19,11 @@ from login import LoginWindow
 class AnimatedBackground(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.offset = 0.0
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.animate)
-        self.timer.start(50)
-
-    def animate(self):
-        self.offset += 0.005
-        if self.offset > 1.0:
-            self.offset = 0.0
-        self.update()
+        self.setStyleSheet(f"background-color: {styles.COLOR_BG};")
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        gradient = QLinearGradient(0, 0, self.width(), self.height())
-        gradient.setColorAt(0, QColor(styles.COLOR_BG))
-        gradient.setColorAt(self.offset, QColor(styles.COLOR_SURFACE))
-        gradient.setColorAt(1, QColor(styles.COLOR_BG))
-        painter.fillRect(self.rect(), gradient)
+        painter.fillRect(self.rect(), QColor(styles.COLOR_BG))
 
 
 class WorderApp(QMainWindow):
@@ -72,7 +61,7 @@ class WorderApp(QMainWindow):
         self.about_index = 4
         self.admin_index = -1
 
-        # Админка всегда добавляется последней, чтобы не сбить индексы
+        # Админка всегда добавляется последней
         if self.role == 'admin':
             self.admin_screen = self.create_admin_screen()
             self.stacked_widget.addWidget(self.admin_screen)  # 5
@@ -394,6 +383,17 @@ class WorderApp(QMainWindow):
         filter_layout.addWidget(lbl_filter)
         filter_layout.addWidget(combo_filter)
 
+        # Поле поиска для экрана "Все слова"
+        if not is_personal:
+            self.search_input = QLineEdit()
+            self.search_input.setPlaceholderText("🔍 Поиск по словам...")
+            self.search_input.setStyleSheet(f"""
+                QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 4px; padding: 5px 10px; min-width: 200px; }}
+            """)
+            self.search_input.textChanged.connect(
+                lambda text: self.filter_table(self.all_table, self.all_combo, False, text))
+            filter_layout.addWidget(self.search_input)
+
         if is_personal:
             btn_reset = QPushButton("Сбросить прогресс")
             btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -413,6 +413,15 @@ class WorderApp(QMainWindow):
                 """)
                 btn_add.clicked.connect(self.open_add_word_dialog)
                 filter_layout.addWidget(btn_add)
+
+                btn_delete = QPushButton("🗑️ Удалить выбранное")
+                btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_delete.setStyleSheet(f"""
+                    QPushButton {{ background-color: #D93025; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
+                    QPushButton:hover {{ background-color: #B02A1F; }}
+                """)
+                btn_delete.clicked.connect(self.delete_selected_word)
+                filter_layout.addWidget(btn_delete)
             else:
                 btn_load_test = QPushButton("Загрузить тестовые слова")
                 btn_load_test.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -431,6 +440,7 @@ class WorderApp(QMainWindow):
         table.setHorizontalHeaderLabels(["Слово", "Перевод", "Транскрипция", "Статус"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setStyleSheet(f"""
             QTableWidget {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; gridline-color: {styles.COLOR_BORDER}; margin: 0 40px 20px 40px; }}
             QHeaderView::section {{ background-color: {styles.COLOR_BG}; color: {styles.COLOR_TEXT_MAIN}; border: none; padding: 5px; font-weight: bold; }}
@@ -449,6 +459,35 @@ class WorderApp(QMainWindow):
             self.all_combo = combo_filter
 
         return screen
+
+    def delete_selected_word(self):
+        selected_rows = self.all_table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Внимание", "Выберите слово для удаления!")
+            return
+
+        reply = QMessageBox.question(
+            self, "Подтверждение удаления",
+            "Вы уверены, что хотите удалить выбранное слово из общего справочника?\nЭто действие нельзя отменить.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Берем ID из UserRole, а не из текста ячейки
+                item = self.all_table.item(selected_rows[0].row(), 0)
+                word_id = item.data(Qt.ItemDataRole.UserRole)
+
+                if word_id is None:
+                    raise ValueError("Не удалось определить ID слова")
+
+                self.db.execute_query("DELETE FROM reviews WHERE word_id = ?", (word_id,))
+                self.db.execute_query("DELETE FROM words WHERE id = ?", (word_id,))
+
+                self.filter_table(self.all_table, self.all_combo, False)
+                QMessageBox.information(self, "Успех", "Слово успешно удалено!")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка БД", str(e))
 
     def open_add_word_dialog(self):
         dialog = AddWordDialog(self)
@@ -491,7 +530,7 @@ class WorderApp(QMainWindow):
 
         tabs.addTab(users_tab, "Пользователи")
         tabs.addTab(add_word_tab, "Добавить слово")
-        tabs.addTab(stats_tab, "Статистика БД")
+        tabs.addTab(stats_tab, "Статистика и Отчёты")
 
         layout.addWidget(tabs, 1)
         layout.addWidget(self.create_footer())
@@ -605,31 +644,87 @@ class WorderApp(QMainWindow):
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(15)
 
-        info = QLabel("Общая статистика системы")
+        info = QLabel("Управление данными и отчётность")
         info.setStyleSheet(f"font-family: {styles.FONT_HEADER}; font-size: 18px; font-weight: bold;")
         layout.addWidget(info)
 
-        try:
-            total_words = self.db.fetch_one("SELECT COUNT(*) as count FROM words")['count']
-            total_users = self.db.fetch_one("SELECT COUNT(*) as count FROM users")['count']
-            total_reviews = self.db.fetch_one("SELECT COUNT(*) as count FROM reviews")['count']
-        except:
-            total_words = total_users = total_reviews = 0
+        btn_export_csv = QPushButton("📥 Экспорт успеваемости в CSV")
+        btn_export_csv.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_export_csv.setFixedHeight(50)
+        btn_export_csv.setStyleSheet(f"""
+            QPushButton {{ background-color: {styles.COLOR_ACCENT}; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: #4C6EF5; }}
+        """)
+        btn_export_csv.clicked.connect(self.export_report_csv)
+        layout.addWidget(btn_export_csv)
 
-        stats_text = f"""
-        <div style='font-size: 16px; line-height: 2;'>
-            <b>Всего слов в справочнике:</b> {total_words}<br>
-            <b>Зарегистрировано пользователей:</b> {total_users}<br>
-            <b>Всего проведено тренировок:</b> {total_reviews}
-        </div>
-        """
+        btn_backup = QPushButton("💾 Создать резервную копию БД")
+        btn_backup.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_backup.setFixedHeight(50)
+        btn_backup.setStyleSheet(f"""
+            QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: #1E6B31; }}
+        """)
+        btn_backup.clicked.connect(self.create_backup)
+        layout.addWidget(btn_backup)
 
-        stats_label = QLabel(stats_text)
-        stats_label.setStyleSheet(f"color: {styles.COLOR_TEXT_MAIN};")
-        layout.addWidget(stats_label)
         layout.addStretch()
-
         return widget
+
+    def export_report_csv(self):
+        try:
+            filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            filepath = os.path.join(os.getcwd(), filename)
+
+            rows = self.db.fetch_all("""
+                SELECT u.username, w.foreign_word, r.quality, r.next_review_date 
+                FROM reviews r 
+                JOIN users u ON r.user_id = u.id 
+                JOIN words w ON r.word_id = w.id
+            """)
+
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Пользователь', 'Слово', 'Оценка', 'Дата следующей проверки'])
+                for row in rows:
+                    writer.writerow([row['username'], row['foreign_word'], row['quality'], row['next_review_date']])
+
+            QMessageBox.information(self, "Успех", f"Отчёт успешно сохранён:\n{filepath}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать отчёт: {e}")
+
+    def create_backup(self):
+        try:
+            db_path = None
+            if hasattr(self.db, 'db_path'):
+                db_path = self.db.db_path
+
+            if not db_path or not os.path.exists(db_path):
+                possible_paths = [
+                    "worder.db", "words.db",
+                    "database/worder.db", "database/words.db",
+                    "db/worder.db", "db/words.db",
+                    os.path.join(os.path.dirname(__file__), "worder.db"),
+                    os.path.join(os.path.dirname(__file__), "words.db")
+                ]
+                for p in possible_paths:
+                    if os.path.exists(p):
+                        db_path = p
+                        break
+
+            if not db_path:
+                raise FileNotFoundError("Файл базы данных не найден ни в одном из стандартных мест.")
+
+            backup_dir = os.path.join(os.getcwd(), "backups")
+            os.makedirs(backup_dir, exist_ok=True)
+
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
+
+            shutil.copy2(db_path, backup_path)
+            QMessageBox.information(self, "Успех", f"Резервная копия создана:\n{backup_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать бэкап: {str(e)}")
 
     def create_about_screen(self):
         screen = QWidget()
@@ -706,6 +801,8 @@ class WorderApp(QMainWindow):
         table.setRowCount(len(word_list))
         for row, word in enumerate(word_list):
             item_word = QTableWidgetItem(word["word"])
+            # Сохраняем ID внутри элемента таблицы для надежного удаления
+            item_word.setData(Qt.ItemDataRole.UserRole, word["id"])
             item_word.setFlags(item_word.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 0, item_word)
 
@@ -721,15 +818,18 @@ class WorderApp(QMainWindow):
             item_status.setFlags(item_status.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 3, item_status)
 
-    def filter_table(self, table, combo, is_personal):
+    def filter_table(self, table, combo, is_personal, search_text=""):
         selected = combo.currentText()
-        if is_personal:
-            words = self.get_personal_words()
-            if selected != "Все мои слова":
-                words = [w for w in words if w["status"] == selected]
-            self.update_table(table, words)
-        else:
-            self.update_table(table, self.get_all_words())
+        words = self.get_personal_words() if is_personal else self.get_all_words()
+
+        if is_personal and selected != "Все мои слова":
+            words = [w for w in words if w["status"] == selected]
+
+        if search_text:
+            search_lower = search_text.lower()
+            words = [w for w in words if search_lower in w["word"].lower() or search_lower in w["ru"].lower()]
+
+        self.update_table(table, words)
 
     def load_test_words(self):
         test_words = [

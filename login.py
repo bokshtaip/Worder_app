@@ -1,10 +1,94 @@
 import sys
 import bcrypt
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout,
-                             QLabel, QLineEdit, QPushButton, QMessageBox)
+                             QLabel, QLineEdit, QPushButton, QMessageBox, QDialog)
 from PyQt6.QtCore import Qt
 import styles
 from database.db_manager import DatabaseManager
+
+
+class RegisterDialog(QDialog):
+    def __init__(self, db_manager, parent=None):
+        super().__init__(parent)
+        self.db = db_manager
+        self.setWindowTitle("Регистрация")
+        self.setFixedSize(400, 350)
+        self.setStyleSheet(styles.MAIN_STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+
+        title = QLabel("Создать новый аккаунт")
+        title.setStyleSheet(
+            f"font-family: {styles.FONT_HEADER}; font-size: 20px; font-weight: bold; color: {styles.COLOR_TEXT_MAIN};")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        self.input_login = QLineEdit()
+        self.input_login.setPlaceholderText("Придумайте логин")
+        self.input_login.setStyleSheet(f"""
+            QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; padding: 10px; }}
+        """)
+
+        self.input_pass = QLineEdit()
+        self.input_pass.setPlaceholderText("Придумайте пароль")
+        self.input_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        self.input_pass.setStyleSheet(f"""
+            QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; padding: 10px; }}
+        """)
+
+        self.input_pass_confirm = QLineEdit()
+        self.input_pass_confirm.setPlaceholderText("Подтвердите пароль")
+        self.input_pass_confirm.setEchoMode(QLineEdit.EchoMode.Password)
+        self.input_pass_confirm.setStyleSheet(f"""
+            QLineEdit {{ background-color: {styles.COLOR_SURFACE}; color: {styles.COLOR_TEXT_MAIN}; border: 1px solid {styles.COLOR_BORDER}; border-radius: 8px; padding: 10px; }}
+        """)
+
+        layout.addWidget(self.input_login)
+        layout.addWidget(self.input_pass)
+        layout.addWidget(self.input_pass_confirm)
+
+        btn_register = QPushButton("Зарегистрироваться")
+        btn_register.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_register.setFixedHeight(45)
+        btn_register.setStyleSheet(f"""
+            QPushButton {{ background-color: {styles.COLOR_SUCCESS}; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: #1E6B31; }}
+        """)
+        btn_register.clicked.connect(self.handle_register)
+        layout.addWidget(btn_register)
+
+    def handle_register(self):
+        login = self.input_login.text().strip()
+        password = self.input_pass.text().strip()
+        confirm = self.input_pass_confirm.text().strip()
+
+        if not login or not password or not confirm:
+            QMessageBox.warning(self, "Ошибка", "Заполните все поля!")
+            return
+
+        if len(login) < 3:
+            QMessageBox.warning(self, "Ошибка", "Логин должен быть не менее 3 символов!")
+            return
+
+        if password != confirm:
+            QMessageBox.warning(self, "Ошибка", "Пароли не совпадают!")
+            return
+
+        try:
+            existing = self.db.fetch_one("SELECT id FROM users WHERE username = ?", (login,))
+            if existing:
+                QMessageBox.warning(self, "Ошибка", "Этот логин уже занят!")
+                return
+
+            hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            self.db.execute_query("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'user')",
+                                  (login, hashed))
+
+            QMessageBox.information(self, "Успех", f"Аккаунт '{login}' успешно создан!\nТеперь вы можете войти.")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка БД", str(e))
 
 
 class LoginWindow(QWidget):
@@ -14,7 +98,7 @@ class LoginWindow(QWidget):
         self.main_window_instance = None
 
         self.setWindowTitle("Worder — Вход")
-        self.setFixedSize(400, 500)
+        self.setFixedSize(400, 550)
         self.setStyleSheet(styles.MAIN_STYLE)
 
         app = QApplication.instance()
@@ -77,11 +161,24 @@ class LoginWindow(QWidget):
         btn_enter.clicked.connect(self.handle_login)
         layout.addWidget(btn_enter)
 
+        btn_register = QPushButton("Нет аккаунта? Зарегистрироваться")
+        btn_register.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_register.setStyleSheet(f"""
+            QPushButton {{ background-color: transparent; color: {styles.COLOR_ACCENT}; border: none; font-size: 14px; text-decoration: underline; }}
+            QPushButton:hover {{ color: {styles.COLOR_TEXT_MAIN}; }}
+        """)
+        btn_register.clicked.connect(self.open_register)
+        layout.addWidget(btn_register)
+
         info_label = QLabel("Тестовые аккаунты:\nadmin / admin123\nuser / user123")
         info_label.setStyleSheet(
-            f"color: {styles.COLOR_TEXT_MUTED}; font-size: 12px; text-align: center; margin-top: 20px;")
+            f"color: {styles.COLOR_TEXT_MUTED}; font-size: 12px; text-align: center; margin-top: 10px;")
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info_label)
+
+    def open_register(self):
+        dialog = RegisterDialog(self.db, self)
+        dialog.exec()
 
     def _ensure_test_users(self):
         test_users = [('admin', 'admin123', 'admin'), ('user', 'user123', 'user')]
