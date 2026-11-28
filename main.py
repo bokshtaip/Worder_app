@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QFrame, QLineEdit,
                              QStackedWidget, QStackedLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QComboBox, QMessageBox,
-                             QDialog, QDialogButtonBox, QTabWidget, QFormLayout)
+                             QDialog, QDialogButtonBox, QTabWidget, QFormLayout,
+                             QFileDialog)
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QCloseEvent
 import styles
@@ -414,6 +415,15 @@ class WorderApp(QMainWindow):
                 btn_add.clicked.connect(self.open_add_word_dialog)
                 filter_layout.addWidget(btn_add)
 
+                btn_import = QPushButton("📥 Импорт из CSV")
+                btn_import.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_import.setStyleSheet(f"""
+                    QPushButton {{ background-color: {styles.COLOR_ACCENT}; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold; }}
+                    QPushButton:hover {{ background-color: #4C6EF5; }}
+                """)
+                btn_import.clicked.connect(self.import_words_from_csv)
+                filter_layout.addWidget(btn_import)
+
                 btn_delete = QPushButton("🗑️ Удалить выбранное")
                 btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn_delete.setStyleSheet(f"""
@@ -460,6 +470,61 @@ class WorderApp(QMainWindow):
 
         return screen
 
+    def import_words_from_csv(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите CSV файл для импорта", "", "CSV Files (*.csv)"
+        )
+
+        if not file_path:
+            return
+
+        added_count = 0
+        skipped_count = 0
+        skipped_words = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                # Пропускаем заголовок, если он есть
+                header = next(reader, None)
+
+                for row_num, row in enumerate(reader, start=2):
+                    if len(row) < 2:
+                        skipped_count += 1
+                        skipped_words.append(f"Строка {row_num}: недостаточно данных")
+                        continue
+
+                    word = row[0].strip()
+                    translation = row[1].strip()
+                    transcription = row[2].strip() if len(row) > 2 else ""
+
+                    # Валидация: слово должно содержать буквы
+                    if not word or not translation or not re.search(r'[a-zA-Zа-яА-Я]', word):
+                        skipped_count += 1
+                        skipped_words.append(f"Строка {row_num}: '{word}' (некорректный формат)")
+                        continue
+
+                    try:
+                        query = "INSERT INTO words (foreign_word, translation, transcription, collection_id) VALUES (?, ?, ?, 1)"
+                        self.db.execute_query(query, (word, translation, transcription))
+                        added_count += 1
+                    except Exception:
+                        skipped_count += 1
+                        skipped_words.append(f"Строка {row_num}: '{word}' (ошибка БД/дубликат)")
+
+            self.filter_table(self.all_table, self.all_combo, False)
+
+            msg = f"Импорт завершен!\n\n✅ Добавлено: {added_count}\n⚠️ Пропущено: {skipped_count}"
+            if skipped_words:
+                msg += "\n\nПропущенные записи:\n" + "\n".join(skipped_words[:10])
+                if len(skipped_words) > 10:
+                    msg += f"\n...и еще {len(skipped_words) - 10} записей"
+
+            QMessageBox.information(self, "Результат импорта", msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать файл:\n{e}")
+
     def delete_selected_word(self):
         selected_rows = self.all_table.selectionModel().selectedRows()
         if not selected_rows:
@@ -468,24 +533,31 @@ class WorderApp(QMainWindow):
 
         reply = QMessageBox.question(
             self, "Подтверждение удаления",
-            "Вы уверены, что хотите удалить выбранное слово из общего справочника?\nЭто действие нельзя отменить.",
+            f"Вы уверены, что хотите удалить {len(selected_rows)} выбранное(-ых) слово(а)?\nЭто действие нельзя отменить.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                # Берем ID из UserRole, а не из текста ячейки
-                item = self.all_table.item(selected_rows[0].row(), 0)
-                word_id = item.data(Qt.ItemDataRole.UserRole)
+                # Сначала собираем все ID, чтобы избежать проблем с изменением списка во время итерации
+                word_ids = []
+                for index in selected_rows:
+                    item = self.all_table.item(index.row(), 0)
+                    word_id = item.data(Qt.ItemDataRole.UserRole)
+                    if word_id is not None:
+                        word_ids.append(word_id)
 
-                if word_id is None:
-                    raise ValueError("Не удалось определить ID слова")
+                if not word_ids:
+                    raise ValueError("Не удалось определить ID выбранных слов")
 
-                self.db.execute_query("DELETE FROM reviews WHERE word_id = ?", (word_id,))
-                self.db.execute_query("DELETE FROM words WHERE id = ?", (word_id,))
+                # Удаляем записи из БД
+                for wid in word_ids:
+                    self.db.execute_query("DELETE FROM reviews WHERE word_id = ?", (wid,))
+                    self.db.execute_query("DELETE FROM words WHERE id = ?", (wid,))
 
+                # Обновляем таблицу после всех удалений
                 self.filter_table(self.all_table, self.all_combo, False)
-                QMessageBox.information(self, "Успех", "Слово успешно удалено!")
+                QMessageBox.information(self, "Успех", f"Успешно удалено слов: {len(word_ids)}!")
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка БД", str(e))
 
@@ -801,7 +873,6 @@ class WorderApp(QMainWindow):
         table.setRowCount(len(word_list))
         for row, word in enumerate(word_list):
             item_word = QTableWidgetItem(word["word"])
-            # Сохраняем ID внутри элемента таблицы для надежного удаления
             item_word.setData(Qt.ItemDataRole.UserRole, word["id"])
             item_word.setFlags(item_word.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 0, item_word)
